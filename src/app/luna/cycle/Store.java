@@ -5,13 +5,10 @@ import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
 import android.util.Base64;
 import java.security.KeyStore;
-import java.util.ArrayList;
-import java.util.List;
 import javax.crypto.Cipher;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.GCMParameterSpec;
-import org.json.JSONArray;
 import org.json.JSONObject;
 
 final class Store {
@@ -46,16 +43,5 @@ final class Store {
     }
     void put(String name, Object value) {
         synchronized (Store.class) { try { JSONObject d = read(); d.put(name, value); write(d); } catch (org.json.JSONException ex) { throw new IllegalStateException(ex); } }
-    }
-    List<String> protectedApps() {
-        List<String> apps = new ArrayList<>(); JSONArray a = read().optJSONArray("apps");
-        if (a != null) for (int i=0; i<a.length(); i++) apps.add(a.optString(i));
-        return apps;
-    }
-    void protect(String packageName) {
-        synchronized (Store.class) { List<String> list=protectedApps(); if(!list.contains(packageName)) list.add(packageName); put("apps",new JSONArray(list)); }
-    }
-    void forget(String packageName) {
-        synchronized (Store.class) { List<String> list=protectedApps(); list.remove(packageName); put("apps",new JSONArray(list)); }
     }
 }

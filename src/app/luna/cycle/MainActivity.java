@@ -3,14 +3,10 @@ package app.luna.cycle;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.DatePickerDialog;
-import android.content.Intent;
-import android.content.pm.ApplicationInfo;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
-import android.net.Uri;
 import android.os.Bundle;
-import android.provider.Settings;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
@@ -26,7 +22,6 @@ import android.widget.*;
 import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
-import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -36,9 +31,10 @@ public final class MainActivity extends Activity {
     private static final int BG=0xFFFFF8F5, INK=0xFF33282D, MUTED=0xFF85767C, ROSE=0xFF974860, PALE=0xFFF4E2E4;
     private Store store;
     private LinearLayout root, content;
-    private boolean unlocked, normalSession, handoff, inSetup, authBusy;
+    private boolean unlocked, normalSession, inSetup, authBusy;
     private int generation;
     private WebView browser;
+    private static boolean webCleaning;
     private final ExecutorService worker=Executors.newSingleThreadExecutor();
     private YearMonth month=YearMonth.now();
     private final DateTimeFormatter dateFormat=DateTimeFormatter.ofPattern("d MMMM",new Locale("ru"));
@@ -49,18 +45,13 @@ public final class MainActivity extends Activity {
         if(android.os.Build.VERSION.SDK_INT>=33) setRecentsScreenshotEnabled(false);
         WebView.setWebContentsDebuggingEnabled(false);
         store=new Store(this);
-        try { normalSession=store.read().optBoolean("rememberNormal",false); GuardService.lock(this); route(); }
+        try { normalSession=store.read().optBoolean("rememberNormal",false); route(); if(store.read().optBoolean("webCleanupPending",false) || store.read().optBoolean("clearWebOnExit",false)) eraseWebData(false); }
         catch(RuntimeException ex) { new AlertDialog.Builder(this).setMessage(ex.getMessage()).setPositiveButton("Закрыть",(d,w)->finish()).show(); }
     }
     private void route() {
         if(!store.read().has("normalHash")) signup();
         else if(normalSession) tracker();
         else login();
-    }
-    @Override protected void onResume() {
-        super.onResume();
-        // Returning from a native app always reseals it, before showing tracker UI.
-        if(store!=null && handoff) { handoff=false; GuardService.lock(this); }
     }
     @Override protected void onPause() {
         super.onPause();
@@ -75,7 +66,6 @@ public final class MainActivity extends Activity {
             // Clear any partially entered credentials when switching away from login.
             if(!normalSession) login();
         }
-        if(!handoff) GuardService.lock(this);
     }
     @Override protected void onDestroy() { generation++; closeBrowser(); worker.shutdownNow(); super.onDestroy(); }
     @Override public void onBackPressed() {
@@ -84,7 +74,7 @@ public final class MainActivity extends Activity {
         else { super.onBackPressed(); }
     }
     private void lockToTracker() {
-        generation++; unlocked=false; closeBrowser(); GuardService.lock(this);
+        generation++; unlocked=false; closeBrowser();
         normalSession=true; store.put("rememberNormal",true); tracker();
     }
     private int dp(float value) { return (int)(value*getResources().getDisplayMetrics().density+.5f); }
@@ -236,52 +226,21 @@ public final class MainActivity extends Activity {
         button(web,"Telegram Web",true,()->openWeb("Telegram","https://web.telegram.org/k/"));
         button(web,"TikTok Web",false,()->openWeb("TikTok","https://www.tiktok.com/"));
         button(web,"Удалить входы и данные веб-сервисов",false,()->new AlertDialog.Builder(this).setMessage("Будут удалены локальные веб-сессии и данные сайтов. Аккаунты Telegram и TikTok сохранятся.").setNegativeButton("Отмена",null).setPositiveButton("Удалить",(d,w)->clearWeb()).show());
-        LinearLayout nativeApps=card(content);nativeApps.addView(bold("Android-приложения",20,INK));
-        if(Profile.owner(this)) {
-            nativeApps.addView(text("Вы в отдельном профиле. Скрытые APK недоступны до входа. Для запуска нужен включённый контроль выхода и Android 13+.",13,MUTED));
-            nativeApps.addView(text(GuardService.allowed(this)?"Доступ к статистике использования разрешён":"Для автоблокировки нужен доступ к статистике использования",13,ROSE));
-            button(nativeApps,"Настроить блокировку при выходе",false,this::guardSettings);
-            for(String pkg:store.protectedApps()) {
-                String label=pkg;try{label=getPackageManager().getApplicationLabel(getPackageManager().getApplicationInfo(pkg,android.content.pm.PackageManager.MATCH_UNINSTALLED_PACKAGES)).toString();}catch(Exception ignored){}
-                final String target=pkg;button(nativeApps,label,true,()->{if(handoff)return;handoff=true;try{Profile.open(this,target);}catch(RuntimeException ex){handoff=false;throw ex;}});
-            }
-            button(nativeApps,"Выбрать установленные приложения",false,this::pickApps);
-            button(nativeApps,"Установить APK в этот профиль",false,this::pickApk);
-            nativeApps.addView(text("APK устанавливаются отдельно. Данные и входы из личных приложений не переносятся. После установки приложение автоматически скрывается.",12,MUTED));
-        } else {
-            nativeApps.addView(text("Для настоящих APK создаётся рабочий профиль. Android покажет системное подтверждение. Личные приложения не изменятся; установите нужные APK отдельно в профиль.",13,MUTED));
-            button(nativeApps,"Создать отдельный профиль",true,()->new AlertDialog.Builder(this).setTitle("Отдельный профиль Android").setMessage("Профиль и его значок будут видны в системных настройках. Луна управляет только этим профилем. Затем откройте копию Луны со значком портфеля и войдите тем же дополнительным логином. Удаление профиля удалит его приложения и данные.").setNegativeButton("Отмена",null).setPositiveButton("Продолжить",(d,w)->{try{startActivityForResult(Profile.provision(this),70);}catch(RuntimeException ex){message(ex.getMessage());}}).show());
-        }
+        CheckBox forget=new CheckBox(this);
+        forget.setText("Удалять входы в сайты при закрытии"); forget.setTextColor(INK);
+        forget.setChecked(store.read().optBoolean("clearWebOnExit",false)); web.addView(forget);
+        forget.setOnCheckedChangeListener((b,checked)->{store.put("clearWebOnExit",checked);if(checked)eraseWebData(true);});
+        web.addView(text("История переходов и веб-кэш очищаются при закрытии окна. При включении переключателя также запрашивается удаление cookie и веб-хранилищ: в сайты потребуется входить заново. Данные аккаунтов на серверах не удаляются.",12,MUTED));
         button(content,"Заблокировать и вернуться к календарю",true,this::lockToTracker);
-        content.addView(text("Луна не делает телефон «невидимым»: профиль, служба и само приложение обнаруживаются в настройках. Активный APK временно доступен системе. Очистить чужую историю недавних задач Android не разрешает.",12,MUTED));
-    }
-    private void guardSettings() {
-        new AlertDialog.Builder(this).setTitle("Блокировка при выходе").setMessage("Разрешите Луне доступ к статистике использования именно в рабочем профиле. Служба использует время открытия и закрытия приложений. Она не читает сообщения, экран, пароли и нажатия. Пока APK открыт, Android показывает нейтральный индикатор фонового сеанса «Луна». После возврата войдите снова.").setNegativeButton("Отмена",null).setPositiveButton("Открыть настройки",(d,w)->startActivity(new Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS,Uri.parse("package:"+getPackageName())))).show();
-    }
-    private void pickApps() {
-        List<ApplicationInfo> infos=getPackageManager().getInstalledApplications(android.content.pm.PackageManager.MATCH_UNINSTALLED_PACKAGES);
-        List<ApplicationInfo> apps=new ArrayList<>();for(ApplicationInfo a:infos)if((a.flags&ApplicationInfo.FLAG_SYSTEM)==0 && (a.flags&ApplicationInfo.FLAG_INSTALLED)!=0 && !a.packageName.equals(getPackageName()) && !store.protectedApps().contains(a.packageName))apps.add(a);
-        apps.sort(Comparator.comparing(a->getPackageManager().getApplicationLabel(a).toString()));
-        if(apps.isEmpty()) {message("Нет новых приложений в этом профиле. Установите APK через кнопку ниже.");return;}
-        String[] names=new String[apps.size()];for(int i=0;i<apps.size();i++)names[i]=getPackageManager().getApplicationLabel(apps.get(i))+"\n"+apps.get(i).packageName;
-        new AlertDialog.Builder(this).setTitle("Скрыть приложение").setItems(names,(d,index)->{try{Profile.protect(this,apps.get(index).packageName);vault();}catch(RuntimeException ex){message(ex.getMessage());}}).setNegativeButton("Закрыть",null).show();
-    }
-    private void pickApk() {
-        if(!getPackageManager().canRequestPackageInstalls()) {
-            new AlertDialog.Builder(this).setMessage("Android требует разрешить установку из Луны. После включения вернитесь, снова войдите и нажмите установку APK.").setPositiveButton("Открыть",(d,w)->startActivity(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,Uri.parse("package:"+getPackageName())))).setNegativeButton("Отмена",null).show();return;
-        }
-        Intent i=new Intent(Intent.ACTION_OPEN_DOCUMENT);i.setType("application/vnd.android.package-archive");i.addCategory(Intent.CATEGORY_OPENABLE);startActivityForResult(i,71);
-    }
-    @Override protected void onActivityResult(int request,int result,Intent data) {
-        super.onActivityResult(request,result,data);
-        if(request==71 && result==RESULT_OK && data!=null && data.getData()!=null) {
-            Intent install=new Intent(Intent.ACTION_VIEW);install.setDataAndType(data.getData(),"application/vnd.android.package-archive");install.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            try {startActivity(install);}catch(RuntimeException ex){message("В профиле нет доступного установщика APK. Установка не выполнена.");}
-        }
+        content.addView(text("Веб-страницы открываются внутри Луны и не добавляются в историю Chrome. Само приложение остаётся видно в настройках Android.",12,MUTED));
     }
     private void openWeb(String name,String url) {
         if(!unlocked)return;
-        closeBrowser();screen("Веб-сервис",name,"Уход в другое приложение закроет этот экран.");
+        if(webCleaning || store.read().optBoolean("webCleanupPending",false)){eraseWebData(false);message("Завершается очистка веб-данных. Повторите открытие через несколько секунд.");return;}
+        closeBrowser();
+        if(webCleaning)return;
+        if(store.read().optBoolean("clearWebOnExit",false))store.put("webCleanupPending",true);
+        screen("Веб-сервис",name,"Уход в другое приложение закроет этот экран.");
         button(content,"К списку сервисов",false,()->{closeBrowser();vault();});
         WebView w=new WebView(this);browser=w;
         WebSettings s=w.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setAllowFileAccess(false);s.setAllowContentAccess(false);s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);s.setGeolocationEnabled(false);s.setSupportMultipleWindows(false);s.setJavaScriptCanOpenWindowsAutomatically(false);s.setMediaPlaybackRequiresUserGesture(true);s.setSaveFormData(false);s.setCacheMode(WebSettings.LOAD_NO_CACHE);
@@ -299,13 +258,24 @@ public final class MainActivity extends Activity {
     }
     private void closeBrowser() {
         if(browser==null)return;WebView old=browser;browser=null;
-        old.stopLoading();old.onPause();old.pauseTimers();old.clearHistory();
+        old.stopLoading();old.onPause();old.pauseTimers();old.clearHistory();old.clearCache(true);
         if(old.getParent() instanceof android.view.ViewGroup)((android.view.ViewGroup)old.getParent()).removeView(old);
         old.removeAllViews();old.destroy();
+        if(store.read().optBoolean("clearWebOnExit",false))eraseWebData(false);
     }
-    private void clearWeb() {
-        closeBrowser();android.webkit.WebStorage.getInstance().deleteAllData();
-        WebView temp=new WebView(this);temp.clearCache(true);temp.clearHistory();temp.destroy();
-        CookieManager.getInstance().removeAllCookies(ok->{CookieManager.getInstance().flush();Toast.makeText(this,"Веб-данные удалены",Toast.LENGTH_SHORT).show();});
+    private void clearWeb() { closeBrowser(); eraseWebData(true); }
+    private void eraseWebData(boolean notify) {
+        if(webCleaning){if(notify)Toast.makeText(this,"Очистка уже выполняется",Toast.LENGTH_SHORT).show();return;}
+        webCleaning=true;store.put("webCleanupPending",true);
+        try {
+            android.webkit.WebStorage.getInstance().deleteAllData();
+            WebView temp=new WebView(this);temp.clearCache(true);temp.clearHistory();temp.destroy();
+            CookieManager.getInstance().removeAllCookies(removed->{
+                try{CookieManager.getInstance().flush();store.put("webCleanupPending",false);
+                    if(notify)Toast.makeText(getApplicationContext(),"Cookie удалены; очистка веб-хранилищ запрошена",Toast.LENGTH_LONG).show();
+                }catch(RuntimeException ex){Toast.makeText(getApplicationContext(),"Очистка не завершена. Перезапустите Луну.",Toast.LENGTH_LONG).show();}
+                finally{webCleaning=false;}
+            });
+        } catch(RuntimeException ex){webCleaning=false;Toast.makeText(getApplicationContext(),"Очистка не завершена. Перезапустите Луну.",Toast.LENGTH_LONG).show();}
     }
 }

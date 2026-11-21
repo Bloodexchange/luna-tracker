@@ -25,22 +25,6 @@ public final class CoreTest {
         check(Core.nextPeriod(start,start.plusDays(28),28).equals(start.plusDays(56)),"next full cycle");
         check(Core.nextPeriod(start,start.minusDays(2),28).equals(start),"future initial period");
         try{Core.cycleDay(start,start,0);throw new AssertionError("invalid length accepted");}catch(IllegalArgumentException expected){assertions++;}
-        SessionMonitor session=new SessionMonitor("target",0);
-        session.resumed("luna","Main",10);
-        check(!session.mustLock(100),"initial source activity does not abort launch");
-        session.resumed("target","First",200);
-        check(!session.mustLock(5000),"active target stays open");
-        session.paused("target","First",5100);
-        check(!session.mustLock(5300),"short activity transition grace");
-        session.resumed("target","Second",5350);
-        session.paused("target","First",5400);
-        check(!session.mustLock(5900),"old activity stop does not lock new target activity");
-        session.paused("target","Second",6000);
-        check(session.mustLock(6400),"backgrounded target locks");
-        SessionMonitor switched=new SessionMonitor("target",0);switched.resumed("target","First",100);switched.resumed("other","Other",200);
-        check(switched.mustLock(200),"different foreground app locks immediately");
-        SessionMonitor missing=new SessionMonitor("target",0);
-        check(missing.mustLock(8000),"no foreground evidence times out closed");
-        System.out.println("PASS: "+assertions+" authentication, cycle and session assertions");
+        System.out.println("PASS: "+assertions+" authentication and cycle assertions");
     }
 }

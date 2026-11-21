@@ -14,9 +14,10 @@ $android = Get-ChildItem -LiteralPath $ToolsRoot -Filter android.jar -Recurse | 
 if (-not $aapt -or -not $android) { throw 'Android platform and build tools are missing' }
 $bt = $aapt.Directory.FullName
 $build = Join-Path $projectRoot 'build'
+$compiled = Join-Path $build ('compile-' + [guid]::NewGuid().ToString('N'))
 $out = Join-Path $projectRoot 'artifacts'
 $sign = Join-Path $ToolsRoot 'signing'
-foreach ($path in @($build,$out,$sign,"$build\classes","$build\generated","$build\dex","$build\tests")) { New-Item -ItemType Directory -Force -Path $path | Out-Null }
+foreach ($path in @($build,$out,$sign,$compiled,"$build\generated","$build\dex","$build\tests")) { New-Item -ItemType Directory -Force -Path $path | Out-Null }
 Copy-Item -LiteralPath $android.FullName -Destination "$build\android.jar" -Force
 function Check([string]$step) { if ($LASTEXITCODE -ne 0) { throw "$step failed ($LASTEXITCODE)" } }
 & $aapt.FullName compile --dir res -o build/resources.zip
@@ -24,13 +25,13 @@ Check 'Resource compilation'
 & $aapt.FullName link -o build/unsigned.apk --manifest AndroidManifest.xml -I build/android.jar --java build/generated build/resources.zip
 Check 'Resource linking'
 $sources = @(Get-ChildItem "$projectRoot\src","$build\generated" -Filter *.java -Recurse | ForEach-Object { $_.FullName })
-& $javac -encoding UTF-8 -source 8 -target 8 -classpath $android.FullName -d "$build\classes" @sources
+& $javac -encoding UTF-8 -source 8 -target 8 -classpath $android.FullName -d $compiled @sources
 Check 'Java compilation'
-& $javac -encoding UTF-8 -d "$build\tests" "$projectRoot\src\app\luna\cycle\Core.java" "$projectRoot\src\app\luna\cycle\SessionMonitor.java" "$projectRoot\tests\CoreTest.java"
+& $javac -encoding UTF-8 -d "$build\tests" "$projectRoot\src\app\luna\cycle\Core.java" "$projectRoot\tests\CoreTest.java"
 Check 'Test compilation'
 & $java -cp "$build\tests" app.luna.cycle.CoreTest
 Check 'Core tests'
-& $jar cf "$build\classes.jar" -C "$build\classes" .
+& $jar cf "$build\classes.jar" -C $compiled .
 Check 'Class archive'
 & $java -cp "$bt\lib\d8.jar" com.android.tools.r8.D8 --release --min-api 29 --lib $android.FullName --output "$build\dex" "$build\classes.jar"
 Check 'Dex compilation'
@@ -47,14 +48,14 @@ if (-not (Test-Path -LiteralPath $keystore)) {
     Check 'Signing key generation'
 } else { $env:LUNA_SIGN_PASSWORD = [IO.File]::ReadAllText($passwordFile) }
 try {
-    & $java -jar "$bt\lib\apksigner.jar" sign --ks $keystore --ks-key-alias luna --ks-pass env:LUNA_SIGN_PASSWORD --out "$out\Luna-0.1.0.apk" "$build\aligned.apk"
+    & $java -jar "$bt\lib\apksigner.jar" sign --ks $keystore --ks-key-alias luna --ks-pass env:LUNA_SIGN_PASSWORD --out "$out\Luna-0.2.0.apk" "$build\aligned.apk"
     Check 'APK signing'
 } finally { Remove-Item Env:LUNA_SIGN_PASSWORD -ErrorAction SilentlyContinue }
-& $java -jar "$bt\lib\apksigner.jar" verify --verbose "$out\Luna-0.1.0.apk"
+& $java -jar "$bt\lib\apksigner.jar" verify --verbose "$out\Luna-0.2.0.apk"
 Check 'APK signature verification'
-& "$bt\zipalign.exe" -c -p 4 artifacts/Luna-0.1.0.apk
+& "$bt\zipalign.exe" -c -p 4 artifacts/Luna-0.2.0.apk
 Check 'Alignment verification'
-$hash = (Get-FileHash "$out\Luna-0.1.0.apk" -Algorithm SHA256).Hash.ToLower()
-[IO.File]::WriteAllText("$out\SHA256.txt", "$hash  Luna-0.1.0.apk`n")
-Write-Output "APK ready: $out\Luna-0.1.0.apk"
+$hash = (Get-FileHash "$out\Luna-0.2.0.apk" -Algorithm SHA256).Hash.ToLower()
+[IO.File]::WriteAllText("$out\SHA256.txt", "$hash  Luna-0.2.0.apk`n")
+Write-Output "APK ready: $out\Luna-0.2.0.apk"
 Write-Output "SHA-256: $hash"
