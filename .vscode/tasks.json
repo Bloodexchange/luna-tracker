@@ -1,0 +1,13 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Луна: собрать и проверить APK",
+      "type": "shell",
+      "command": "powershell",
+      "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "${workspaceFolder}/build.ps1"],
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": []
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+build/
+artifacts/*.apk
+artifacts/*.idsig
+*.jks
+*.p12
+*.pass
+local.properties
+# Environment-specific download helper; not required to build the application.
+/bootstrap-download.mjs

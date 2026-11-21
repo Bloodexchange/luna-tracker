@@ -1,0 +1,10 @@
+<resources>
+    <string name="app_name">Луна</string>
+    <string name="admin_description">Управляет только отдельным рабочим профилем: скрывает выбранные приложения и блокирует их при выходе. Личный профиль не изменяется. Профиль виден в настройках Android.</string>
+    <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item><item name="android:colorAccent">#9D4765</item>
+        <item name="android:windowLightStatusBar">true</item><item name="android:statusBarColor">#FFF8F5</item>
+        <item name="android:navigationBarColor">#FFF8F5</item><item name="android:windowLightNavigationBar">true</item>
+        <item name="android:windowActionModeOverlay">true</item><item name="android:windowDisablePreview">true</item>
+    </style>
+</resources>
