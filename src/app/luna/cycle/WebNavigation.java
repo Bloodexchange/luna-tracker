@@ -28,4 +28,9 @@ final class WebNavigation {
         String chrome=m.find()?m.group():"Chrome/120.0.0.0";
         return "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "+chrome+" Safari/537.36";
     }
+    static String displayOrigin(String url){
+        URI u=parse(url);
+        if(u==null||!"https".equalsIgnoreCase(u.getScheme())||u.getHost()==null||u.getUserInfo()!=null)return "Новое окно · адрес ещё не подтверждён";
+        return "https://"+u.getHost().toLowerCase(Locale.ROOT)+(u.getPort()==-1||u.getPort()==443?"":":"+u.getPort());
+    }
 }

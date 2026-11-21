@@ -31,6 +31,12 @@ public final class WebNavigationTest {
         check(desktop.contains("Chrome/142.0.7444.1"),"installed Chromium version retained");
         check(!desktop.contains("Android")&&!desktop.contains("Mobile")&&!desktop.contains("; wv"),"desktop UA has no mobile markers");
         check(WebNavigation.desktopUserAgent(null).contains("Mozilla/5.0"),"missing UA handled");
+        check(WebNavigation.displayOrigin("https://accounts.example.com/login?code=secret").equals("https://accounts.example.com"),"login header contains origin without secrets");
+        check(WebNavigation.displayOrigin("https://accounts.google.com.evil.example/login").equals("https://accounts.google.com.evil.example"),"lookalike origin displayed in full");
+        check(WebNavigation.displayOrigin("https://example.com:8443/auth").equals("https://example.com:8443"),"nonstandard origin port displayed");
+        check(WebNavigation.displayOrigin("https://example.com:443/auth").equals("https://example.com"),"default TLS port omitted");
+        check(!WebNavigation.displayOrigin("about:blank").startsWith("https://"),"blank popup does not claim a verified host");
+        check(!WebNavigation.displayOrigin("https://user:password@example.com").contains("password"),"URL credentials not shown in login header");
         System.out.println("PASS: "+assertions+" web navigation and browser-mode assertions");
     }
 }

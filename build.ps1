@@ -52,14 +52,14 @@ if (-not (Test-Path -LiteralPath $keystore)) {
     Check 'Signing key generation'
 } else { $env:LUNA_SIGN_PASSWORD = [IO.File]::ReadAllText($passwordFile) }
 try {
-    & $java -jar "$bt\lib\apksigner.jar" sign --ks $keystore --ks-key-alias luna --ks-pass env:LUNA_SIGN_PASSWORD --out "$out\Luna-0.4.0.apk" "$build\aligned.apk"
+    & $java -jar "$bt\lib\apksigner.jar" sign --ks $keystore --ks-key-alias luna --ks-pass env:LUNA_SIGN_PASSWORD --out "$out\Luna-0.5.0.apk" "$build\aligned.apk"
     Check 'APK signing'
 } finally { Remove-Item Env:LUNA_SIGN_PASSWORD -ErrorAction SilentlyContinue }
-& $java -jar "$bt\lib\apksigner.jar" verify --verbose "$out\Luna-0.4.0.apk"
+& $java -jar "$bt\lib\apksigner.jar" verify --verbose "$out\Luna-0.5.0.apk"
 Check 'APK signature verification'
-& "$bt\zipalign.exe" -c -p 4 artifacts/Luna-0.4.0.apk
+& "$bt\zipalign.exe" -c -p 4 artifacts/Luna-0.5.0.apk
 Check 'Alignment verification'
-$hash = (Get-FileHash "$out\Luna-0.4.0.apk" -Algorithm SHA256).Hash.ToLower()
-[IO.File]::WriteAllText("$out\SHA256.txt", "$hash  Luna-0.4.0.apk`n")
-Write-Output "APK ready: $out\Luna-0.4.0.apk"
+$hash = (Get-FileHash "$out\Luna-0.5.0.apk" -Algorithm SHA256).Hash.ToLower()
+[IO.File]::WriteAllText("$out\SHA256.txt", "$hash  Luna-0.5.0.apk`n")
+Write-Output "APK ready: $out\Luna-0.5.0.apk"
 Write-Output "SHA-256: $hash"

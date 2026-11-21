@@ -39,6 +39,7 @@ public final class MainActivity extends Activity {
     private boolean unlocked, normalSession, inSetup, authBusy;
     private int generation;
     private WebView browser;
+    private final LinkedHashMap<WebView,LinearLayout> loginWindows=new LinkedHashMap<>();
     private boolean browserIsTikTok;
     private AlertDialog browserMenu;
     private long lastNavigationNotice=-5000;
@@ -83,7 +84,7 @@ public final class MainActivity extends Activity {
         lifecycleHandler.removeCallbacks(expireSession);
         if(unlocked && returnWindow.expired(SystemClock.elapsedRealtime())) {lockToTracker();return;}
         returnWindow.clear();
-        if(browser!=null){browser.onResume();browser.resumeTimers();browserFrame.setVisibility(View.VISIBLE);immersive(true);}
+        if(browser!=null){browser.onResume();for(WebView child:new ArrayList<>(loginWindows.keySet()))if(loginWindows.containsKey(child))child.onResume();browser.resumeTimers();browserFrame.setVisibility(View.VISIBLE);immersive(true);}
     }
     @Override protected void onPause() {
         super.onPause();
@@ -93,6 +94,7 @@ public final class MainActivity extends Activity {
             returnWindow.leave(SystemClock.elapsedRealtime());
             if(browser!=null){
                 browser.evaluateJavascript("document.querySelectorAll('video,audio').forEach(function(m){m.pause();});",null);
+                for(WebView child:new ArrayList<>(loginWindows.keySet()))if(loginWindows.containsKey(child))child.onPause();
                 browser.onPause();browser.pauseTimers();browserFrame.setVisibility(View.INVISIBLE);
             }
             lifecycleHandler.removeCallbacks(expireSession);
@@ -112,7 +114,8 @@ public final class MainActivity extends Activity {
         if(focused && foreground)immersive(browser!=null);
     }
     @Override public void onBackPressed() {
-        if(videoView!=null)hideVideo();
+        if(!loginWindows.isEmpty()){WebView top=topBrowser();if(top.canGoBack())top.goBack();else closeLoginWindow(top);}
+        else if(videoView!=null)hideVideo();
         else if(browser!=null) { if(browser.canGoBack())browser.goBack();else moveTaskToBack(true); }
         else if(unlocked) { moveTaskToBack(true); }
         else { super.onBackPressed(); }
@@ -270,6 +273,11 @@ public final class MainActivity extends Activity {
         LinearLayout web=card(content);web.addView(bold("Веб-сервисы",20,INK));web.addView(text("Работают внутри Луны. Отдельных значков и уведомлений нет. Это веб-версии, возможности которых определяет сервис.",13,MUTED));
         button(web,"Telegram Web",true,()->openWeb("Telegram","https://web.telegram.org/k/"));
         button(web,"TikTok Web",false,()->openWeb("TikTok","https://www.tiktok.com/foryou"));
+        button(web,"Открыть регистрацию TikTok",false,()->openWeb("TikTok","https://www.tiktok.com/signup"));
+        CheckBox loginCookies=new CheckBox(this);loginCookies.setText("Cookie для совместимости входа и проверок сайта");loginCookies.setTextColor(INK);
+        loginCookies.setChecked(store.read().optBoolean("loginCookies",true));web.addView(loginCookies);
+        loginCookies.setOnCheckedChangeListener((b,checked)->store.put("loginCookies",checked));
+        web.addView(text("Новые окна, открытые вашим нажатием, работают внутри Луны. Сторонние cookie могут требоваться для входа и проверок, но также позволяют сайтам отслеживать посещения. Камера и микрофон автоматически не разрешаются.",12,MUTED));
         CheckBox desktop=new CheckBox(this);desktop.setText("TikTok: версия сайта для ПК");desktop.setTextColor(INK);
         desktop.setChecked(store.read().optBoolean("tiktokDesktop",true));web.addView(desktop);
         desktop.setOnCheckedChangeListener((b,checked)->store.put("tiktokDesktop",checked));
@@ -304,12 +312,23 @@ public final class MainActivity extends Activity {
             return insets;
         });
         WebView w=new WebView(this);browser=w;browserIsTikTok=WebNavigation.isTikTok(url);
-        WebSettings s=w.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setAllowFileAccess(false);s.setAllowContentAccess(false);s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);s.setGeolocationEnabled(false);s.setSupportMultipleWindows(false);s.setJavaScriptCanOpenWindowsAutomatically(false);s.setMediaPlaybackRequiresUserGesture(true);s.setSaveFormData(false);s.setCacheMode(WebSettings.LOAD_NO_CACHE);
-        applyBrowserMode(w);
-        CookieManager.getInstance().setAcceptCookie(true);CookieManager.getInstance().setAcceptThirdPartyCookies(w,false);
+        configureWebView(w,true);
+        browserFrame.addView(w,new FrameLayout.LayoutParams(-1,-1));
+        TextView close=text("⋮",25,Color.WHITE);close.setGravity(Gravity.CENTER);close.setPadding(0,0,0,0);close.setBackground(rounded(0x9933282D,24));
+        close.setContentDescription("Меню сайта: свернуть, сменить вид или закрыть");
+        FrameLayout.LayoutParams closePosition=new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.TOP|Gravity.END);closePosition.setMargins(dp(8),dp(8),dp(8),dp(8));browserFrame.addView(close,closePosition);
+        close.setOnClickListener(v->showBrowserMenu());
+        setContentView(browserFrame);immersive(true);browserFrame.requestApplyInsets();w.onResume();w.resumeTimers();w.loadUrl(url);
+    }
+    private void configureWebView(WebView w,boolean primary){
+        WebSettings s=w.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setAllowFileAccess(false);s.setAllowContentAccess(false);s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);s.setGeolocationEnabled(false);s.setSupportMultipleWindows(true);s.setJavaScriptCanOpenWindowsAutomatically(false);s.setMediaPlaybackRequiresUserGesture(true);s.setSaveFormData(false);s.setCacheMode(WebSettings.LOAD_NO_CACHE);
+        if(primary)applyBrowserMode(w);
+        CookieManager.getInstance().setAcceptCookie(true);CookieManager.getInstance().setAcceptThirdPartyCookies(w,store.read().optBoolean("loginCookies",true));
         w.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
         w.setWebChromeClient(new WebChromeClient(){
             @Override public void onPermissionRequest(PermissionRequest r){r.deny();}
+            @Override public boolean onCreateWindow(WebView source,boolean dialog,boolean userGesture,android.os.Message message){return createLoginWindow(source,userGesture,message);}
+            @Override public void onCloseWindow(WebView window){closeLoginWindow(window);}
             @Override public void onShowCustomView(View view,CustomViewCallback callback){
                 if(videoView!=null || browser!=w || !foreground){callback.onCustomViewHidden();return;}
                 videoView=view;videoCallback=callback;browserFrame.addView(view,new FrameLayout.LayoutParams(-1,-1));w.setVisibility(View.INVISIBLE);immersive(true);
@@ -318,9 +337,9 @@ public final class MainActivity extends Activity {
         });
         w.setWebViewClient(new WebViewClient(){
             @Override public boolean shouldOverrideUrlLoading(WebView view,WebResourceRequest req){
-                boolean blocked=WebNavigation.block(req.getUrl().toString());if(blocked&&req.isForMainFrame())navigationNotice();return blocked;
+                boolean blocked=blockNavigation(view,req.getUrl().toString());if(blocked&&req.isForMainFrame())navigationNotice();return blocked;
             }
-            @Override public boolean shouldOverrideUrlLoading(WebView view,String address){boolean blocked=WebNavigation.block(address);if(blocked)navigationNotice();return blocked;}
+            @Override public boolean shouldOverrideUrlLoading(WebView view,String address){boolean blocked=blockNavigation(view,address);if(blocked)navigationNotice();return blocked;}
             @Override public android.webkit.WebResourceResponse shouldInterceptRequest(WebView view,WebResourceRequest req){
                 if(req.isForMainFrame()&&WebNavigation.isStore(req.getUrl().toString())){
                     String html="<!doctype html><meta name='viewport' content='width=device-width'><meta charset='utf-8'><p>Переход в магазин приложений заблокирован. Откройте меню ⋮, чтобы вернуться к сайту или сменить его вид.</p>";
@@ -328,17 +347,11 @@ public final class MainActivity extends Activity {
                 }
                 return null;
             }
-            @Override public void onPageStarted(WebView view,String address,android.graphics.Bitmap icon){if(WebNavigation.isStore(address)){view.stopLoading();navigationNotice();}}
+            @Override public void onPageStarted(WebView view,String address,android.graphics.Bitmap icon){updateLoginAddress(view,address);if(WebNavigation.isStore(address)){view.stopLoading();navigationNotice();}}
             @Override public void onReceivedSslError(WebView view,android.webkit.SslErrorHandler handler,android.net.http.SslError error){handler.cancel();message("Сервис не подтвердил безопасное соединение.");}
             @Override public void onReceivedError(WebView view,WebResourceRequest req,android.webkit.WebResourceError error){if(req.isForMainFrame())Toast.makeText(MainActivity.this,"Не удалось загрузить сервис. Проверьте интернет.",Toast.LENGTH_LONG).show();}
         });
         w.setDownloadListener((u,agent,disposition,mime,length)->message("Загрузки отключены, чтобы файлы не попадали в общий список телефона."));
-        browserFrame.addView(w,new FrameLayout.LayoutParams(-1,-1));
-        TextView close=text("⋮",25,Color.WHITE);close.setGravity(Gravity.CENTER);close.setPadding(0,0,0,0);close.setBackground(rounded(0x9933282D,24));
-        close.setContentDescription("Меню сайта: свернуть, сменить вид или закрыть");
-        FrameLayout.LayoutParams closePosition=new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.TOP|Gravity.END);closePosition.setMargins(dp(8),dp(8),dp(8),dp(8));browserFrame.addView(close,closePosition);
-        close.setOnClickListener(v->showBrowserMenu());
-        setContentView(browserFrame);immersive(true);browserFrame.requestApplyInsets();w.onResume();w.resumeTimers();w.loadUrl(url);
     }
     private void applyBrowserMode(WebView view){
         WebSettings settings=view.getSettings();
@@ -346,6 +359,45 @@ public final class MainActivity extends Activity {
         settings.setUserAgentString(desktop?WebNavigation.desktopUserAgent(WebSettings.getDefaultUserAgent(this)):null);
         settings.setUseWideViewPort(browserIsTikTok);settings.setLoadWithOverviewMode(desktop);
         settings.setBuiltInZoomControls(browserIsTikTok);settings.setDisplayZoomControls(false);
+    }
+    private WebView topBrowser(){
+        WebView current=browser;for(WebView child:loginWindows.keySet())current=child;return current;
+    }
+    private boolean blockNavigation(WebView view,String address){
+        // window.open() may bootstrap an empty child before navigating to HTTPS.
+        return !(loginWindows.containsKey(view)&&"about:blank".equals(address))&&WebNavigation.block(address);
+    }
+    private boolean createLoginWindow(WebView source,boolean userGesture,android.os.Message result){
+        if(!unlocked||!foreground||browser==null||!userGesture||loginWindows.size()>=3)return false;
+        if(source!=browser&&!loginWindows.containsKey(source))return false;
+        if(!(result.obj instanceof WebView.WebViewTransport))return false;
+        WebView child=new WebView(this);LinearLayout pane=vertical();pane.setBackgroundColor(BG);
+        LinearLayout header=new LinearLayout(this);header.setGravity(Gravity.CENTER_VERTICAL);header.setPadding(dp(10),dp(6),dp(6),dp(6));
+        TextView address=text("Новое окно сайта · загрузка адреса…",13,INK);address.setTag("address");header.addView(address,new LinearLayout.LayoutParams(0,-2,1));
+        Button close=new Button(this);close.setText("×");close.setContentDescription("Закрыть дополнительное окно");header.addView(close,new LinearLayout.LayoutParams(dp(56),dp(48)));
+        pane.addView(header);pane.addView(child,new LinearLayout.LayoutParams(-1,0,1));
+        loginWindows.put(child,pane);configureWebView(child,false);
+        browserFrame.addView(pane,new FrameLayout.LayoutParams(-1,-1));
+        close.setOnClickListener(v->closeLoginWindow(child));
+        ((WebView.WebViewTransport)result.obj).setWebView(child);result.sendToTarget();return true;
+    }
+    private void updateLoginAddress(WebView child,String address){
+        LinearLayout pane=loginWindows.get(child);if(pane==null)return;
+        TextView label=pane.findViewWithTag("address");
+        label.setText(WebNavigation.displayOrigin(address));
+    }
+    private void closeLoginWindow(WebView child){
+        if(!loginWindows.containsKey(child))return;
+        // Close descendants too: a newer window may rely on this one's opener.
+        List<WebView> children=new ArrayList<>(loginWindows.keySet());int from=children.indexOf(child);
+        for(int i=children.size()-1;i>=from;i--){
+            WebView view=children.get(i);LinearLayout pane=loginWindows.remove(view);
+            if(pane==null)continue;
+            if(pane.getParent() instanceof android.view.ViewGroup)((android.view.ViewGroup)pane.getParent()).removeView(pane);
+            view.stopLoading();view.onPause();view.clearHistory();pane.removeView(view);view.removeAllViews();view.destroy();
+        }
+        // Shared cookies are kept so the opener can complete the sign-in flow.
+        CookieManager.getInstance().flush();
     }
     private void navigationNotice(){
         long now=SystemClock.elapsedRealtime();if(now-lastNavigationNotice<5000)return;lastNavigationNotice=now;
@@ -393,6 +445,7 @@ public final class MainActivity extends Activity {
     }
     private void closeBrowser() {
         if(browserMenu!=null){browserMenu.dismiss();browserMenu=null;}
+        for(WebView child:new ArrayList<>(loginWindows.keySet()))closeLoginWindow(child);
         if(browser==null)return;hideVideo();WebView old=browser;browser=null;
         old.stopLoading();old.onPause();old.pauseTimers();old.clearHistory();old.clearCache(true);
         if(old.getParent() instanceof android.view.ViewGroup)((android.view.ViewGroup)old.getParent()).removeView(old);
