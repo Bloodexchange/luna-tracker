@@ -105,7 +105,7 @@ public final class MainActivity extends Activity {
     }
     @Override public void onWindowFocusChanged(boolean focused) {
         super.onWindowFocusChanged(focused);
-        if(focused && foreground && browser!=null)immersive(true);
+        if(focused && foreground)immersive(browser!=null);
     }
     @Override public void onBackPressed() {
         if(videoView!=null)hideVideo();
@@ -126,7 +126,6 @@ public final class MainActivity extends Activity {
     private LinearLayout vertical() { LinearLayout l=new LinearLayout(this); l.setOrientation(LinearLayout.VERTICAL); return l; }
     private LinearLayout card(LinearLayout parent) { LinearLayout l=vertical(); l.setPadding(dp(20),dp(18),dp(20),dp(18)); l.setBackground(rounded(Color.WHITE,24)); LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2); p.bottomMargin=dp(14); parent.addView(l,p); return l; }
     private void screen(String eyebrow,String title,String subtitle) {
-        immersive(false);
         inSetup=false;
         root=vertical(); root.setBackgroundColor(BG);
         root.setPadding(dp(22),dp(18),dp(22),dp(12));
@@ -137,7 +136,7 @@ public final class MainActivity extends Activity {
         if(!eyebrow.isEmpty()) content.addView(text(eyebrow.toUpperCase(new Locale("ru")),11,MUTED));
         content.addView(bold(title,30,INK));
         if(!subtitle.isEmpty()) content.addView(text(subtitle,14,MUTED));
-        gap(content,20); setContentView(root); root.requestApplyInsets();
+        gap(content,20); setContentView(root); immersive(false); root.requestApplyInsets();
     }
     private Button button(LinearLayout parent,String label,boolean primary,Runnable action) {
         Button b=new Button(this); b.setText(label); b.setAllCaps(false); b.setTextSize(14); b.setTextColor(primary?Color.WHITE:ROSE);
@@ -322,14 +321,19 @@ public final class MainActivity extends Activity {
         setContentView(browserFrame);immersive(true);browserFrame.requestApplyInsets();w.onResume();w.resumeTimers();w.loadUrl(url);
     }
     private void immersive(boolean enabled) {
+        if(isFinishing() || isDestroyed())return;
+        // getDecorView() initializes the window decor. PhoneWindow's controller
+        // accessor can dereference a null decor before the first setContentView.
+        View decor=getWindow().getDecorView();
         if(android.os.Build.VERSION.SDK_INT>=30){
             getWindow().setDecorFitsSystemWindows(false);
-            WindowInsetsController controller=getWindow().getInsetsController();
+            // An unattached View safely returns null; window focus retries later.
+            WindowInsetsController controller=decor.getWindowInsetsController();
             if(controller!=null){
                 if(enabled){controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);controller.hide(WindowInsets.Type.systemBars());}
                 else controller.show(WindowInsets.Type.systemBars());
             }
-        }else getWindow().getDecorView().setSystemUiVisibility(enabled?
+        }else decor.setSystemUiVisibility(enabled?
             View.SYSTEM_UI_FLAG_FULLSCREEN|View.SYSTEM_UI_FLAG_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN|View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_LAYOUT_STABLE:View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
     }
     private void hideVideo() {

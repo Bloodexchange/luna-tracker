@@ -1,4 +1,10 @@
-# Проверка 0.3.0-beta — полный экран и возврат за две минуты
+# Проверка 0.3.1-beta — полный экран и возврат за две минуты
+
+## Исправление ошибки запуска
+
+По фото пользователя версия 0.3.0 падала при обращении к контроллеру не созданного DecorView. Настройка панелей перенесена после setContentView. Контроллер получается через явно созданный View с проверкой null, а не через Window.getInsetsController. При получении фокуса режим применяется повторно.
+
+Проверен скомпилированный байткод: в screen вызов setContentView предшествует immersive; вызов Window.getInsetsController отсутствует, вызов View.getWindowInsetsController присутствует. Это проверка сборки, а не запуск на One UI 8.
 
 ## Выполнено локально
 
@@ -13,10 +19,9 @@
 
 ## Файл
 
-- [Luna-0.3.0.apk](https://github.com/Bloodexchange/luna-tracker/releases/download/v0.3.0-beta/Luna-0.3.0.apk)
-- SHA-256: `39ae0557f2b2ff28f5de66634d6ca484eacf1af10e883b9026a1d83ad53f3d17`
-- Размер: 33 316 байт.
-- Android 10+ / minSdk 29; targetSdk 35; versionCode 3.
+- [Luna-0.3.1.apk](https://github.com/Bloodexchange/luna-tracker/releases/download/v0.3.1-beta/Luna-0.3.1.apk)
+- SHA-256: `751754c0a5a1d9f86d39a4ac14be83eb434472c141f6e79bc97df7ab7f4e2516`
+- Android 10+ / minSdk 29; targetSdk 35; versionCode 4.
 
 ## Не проверено на устройстве
 
