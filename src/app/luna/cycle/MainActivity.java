@@ -39,6 +39,9 @@ public final class MainActivity extends Activity {
     private boolean unlocked, normalSession, inSetup, authBusy;
     private int generation;
     private WebView browser;
+    private boolean browserIsTikTok;
+    private AlertDialog browserMenu;
+    private long lastNavigationNotice=-5000;
     private FrameLayout browserFrame;
     private View videoView;
     private WebChromeClient.CustomViewCallback videoCallback;
@@ -86,6 +89,7 @@ public final class MainActivity extends Activity {
         super.onPause();
         foreground=false;generation++; authBusy=false;
         if(unlocked) {
+            if(browserMenu!=null){browserMenu.dismiss();browserMenu=null;}
             returnWindow.leave(SystemClock.elapsedRealtime());
             if(browser!=null){
                 browser.evaluateJavascript("document.querySelectorAll('video,audio').forEach(function(m){m.pause();});",null);
@@ -109,8 +113,8 @@ public final class MainActivity extends Activity {
     }
     @Override public void onBackPressed() {
         if(videoView!=null)hideVideo();
-        else if(browser!=null) { if(browser.canGoBack())browser.goBack();else{closeBrowser();vault();} }
-        else if(unlocked) { lockToTracker(); }
+        else if(browser!=null) { if(browser.canGoBack())browser.goBack();else moveTaskToBack(true); }
+        else if(unlocked) { moveTaskToBack(true); }
         else { super.onBackPressed(); }
     }
     private void lockToTracker() {
@@ -184,7 +188,7 @@ public final class MainActivity extends Activity {
             worker.execute(()->{String hash=Core.credential(pass.toCharArray()); runOnUiThread(()->{authBusy=false; if(token!=generation || isFinishing()) return; store.put("vaultLogin",login);store.put("vaultHash",hash);tracker();});});
         });
         button(content,"Пока только календарь",false,this::tracker);
-        content.addView(text("После настройки: выйдите из обычного аккаунта и введите дополнительный логин и пароль. После ухода в фон Луна вернётся к календарю.",13,MUTED));
+        content.addView(text("После настройки: выйдите из обычного аккаунта и введите дополнительный логин и пароль. При уходе в фон у вас будет 2 минуты для возвращения.",13,MUTED));
     }
     private void login() {
         screen("С возвращением","Вход в аккаунт","Ваш календарь ждёт вас.");
@@ -265,7 +269,11 @@ public final class MainActivity extends Activity {
         screen("Личный доступ","Ваше пространство","После ухода из приложения у вас есть 2 минуты, чтобы вернуться. Затем закрытый раздел заблокируется.");
         LinearLayout web=card(content);web.addView(bold("Веб-сервисы",20,INK));web.addView(text("Работают внутри Луны. Отдельных значков и уведомлений нет. Это веб-версии, возможности которых определяет сервис.",13,MUTED));
         button(web,"Telegram Web",true,()->openWeb("Telegram","https://web.telegram.org/k/"));
-        button(web,"TikTok Web",false,()->openWeb("TikTok","https://www.tiktok.com/"));
+        button(web,"TikTok Web",false,()->openWeb("TikTok","https://www.tiktok.com/foryou"));
+        CheckBox desktop=new CheckBox(this);desktop.setText("TikTok: версия сайта для ПК");desktop.setTextColor(INK);
+        desktop.setChecked(store.read().optBoolean("tiktokDesktop",true));web.addView(desktop);
+        desktop.setOnCheckedChangeListener((b,checked)->store.put("tiktokDesktop",checked));
+        web.addView(text("Переходы в магазины приложений блокируются. Если TikTok ограничивает просмотр, попробуйте другой вид сайта через меню ⋮. Возможности веб-версии определяет TikTok.",12,MUTED));
         button(web,"Удалить входы и данные веб-сервисов",false,()->new AlertDialog.Builder(this).setMessage("Будут удалены локальные веб-сессии и данные сайтов. Аккаунты Telegram и TikTok сохранятся.").setNegativeButton("Отмена",null).setPositiveButton("Удалить",(d,w)->clearWeb()).show());
         CheckBox forget=new CheckBox(this);
         forget.setText("Удалять входы в сайты при закрытии"); forget.setTextColor(INK);
@@ -295,8 +303,9 @@ public final class MainActivity extends Activity {
             }
             return insets;
         });
-        WebView w=new WebView(this);browser=w;
+        WebView w=new WebView(this);browser=w;browserIsTikTok=WebNavigation.isTikTok(url);
         WebSettings s=w.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setAllowFileAccess(false);s.setAllowContentAccess(false);s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);s.setGeolocationEnabled(false);s.setSupportMultipleWindows(false);s.setJavaScriptCanOpenWindowsAutomatically(false);s.setMediaPlaybackRequiresUserGesture(true);s.setSaveFormData(false);s.setCacheMode(WebSettings.LOAD_NO_CACHE);
+        applyBrowserMode(w);
         CookieManager.getInstance().setAcceptCookie(true);CookieManager.getInstance().setAcceptThirdPartyCookies(w,false);
         w.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
         w.setWebChromeClient(new WebChromeClient(){
@@ -308,17 +317,55 @@ public final class MainActivity extends Activity {
             @Override public void onHideCustomView(){if(browser==w)hideVideo();}
         });
         w.setWebViewClient(new WebViewClient(){
-            @Override public boolean shouldOverrideUrlLoading(WebView view,WebResourceRequest req){return !"https".equals(req.getUrl().getScheme());}
+            @Override public boolean shouldOverrideUrlLoading(WebView view,WebResourceRequest req){
+                boolean blocked=WebNavigation.block(req.getUrl().toString());if(blocked&&req.isForMainFrame())navigationNotice();return blocked;
+            }
+            @Override public boolean shouldOverrideUrlLoading(WebView view,String address){boolean blocked=WebNavigation.block(address);if(blocked)navigationNotice();return blocked;}
+            @Override public android.webkit.WebResourceResponse shouldInterceptRequest(WebView view,WebResourceRequest req){
+                if(req.isForMainFrame()&&WebNavigation.isStore(req.getUrl().toString())){
+                    String html="<!doctype html><meta name='viewport' content='width=device-width'><meta charset='utf-8'><p>Переход в магазин приложений заблокирован. Откройте меню ⋮, чтобы вернуться к сайту или сменить его вид.</p>";
+                    return new android.webkit.WebResourceResponse("text/html","UTF-8",403,"Blocked",Collections.emptyMap(),new java.io.ByteArrayInputStream(html.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+                }
+                return null;
+            }
+            @Override public void onPageStarted(WebView view,String address,android.graphics.Bitmap icon){if(WebNavigation.isStore(address)){view.stopLoading();navigationNotice();}}
             @Override public void onReceivedSslError(WebView view,android.webkit.SslErrorHandler handler,android.net.http.SslError error){handler.cancel();message("Сервис не подтвердил безопасное соединение.");}
             @Override public void onReceivedError(WebView view,WebResourceRequest req,android.webkit.WebResourceError error){if(req.isForMainFrame())Toast.makeText(MainActivity.this,"Не удалось загрузить сервис. Проверьте интернет.",Toast.LENGTH_LONG).show();}
         });
         w.setDownloadListener((u,agent,disposition,mime,length)->message("Загрузки отключены, чтобы файлы не попадали в общий список телефона."));
         browserFrame.addView(w,new FrameLayout.LayoutParams(-1,-1));
-        TextView close=text("×",25,Color.WHITE);close.setGravity(Gravity.CENTER);close.setPadding(0,0,0,0);close.setBackground(rounded(0x9933282D,24));
-        close.setContentDescription("Закрыть сайт и вернуться к списку сервисов");
+        TextView close=text("⋮",25,Color.WHITE);close.setGravity(Gravity.CENTER);close.setPadding(0,0,0,0);close.setBackground(rounded(0x9933282D,24));
+        close.setContentDescription("Меню сайта: свернуть, сменить вид или закрыть");
         FrameLayout.LayoutParams closePosition=new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.TOP|Gravity.END);closePosition.setMargins(dp(8),dp(8),dp(8),dp(8));browserFrame.addView(close,closePosition);
-        close.setOnClickListener(v->{closeBrowser();vault();});
+        close.setOnClickListener(v->showBrowserMenu());
         setContentView(browserFrame);immersive(true);browserFrame.requestApplyInsets();w.onResume();w.resumeTimers();w.loadUrl(url);
+    }
+    private void applyBrowserMode(WebView view){
+        WebSettings settings=view.getSettings();
+        boolean desktop=browserIsTikTok&&store.read().optBoolean("tiktokDesktop",true);
+        settings.setUserAgentString(desktop?WebNavigation.desktopUserAgent(WebSettings.getDefaultUserAgent(this)):null);
+        settings.setUseWideViewPort(browserIsTikTok);settings.setLoadWithOverviewMode(desktop);
+        settings.setBuiltInZoomControls(browserIsTikTok);settings.setDisplayZoomControls(false);
+    }
+    private void navigationNotice(){
+        long now=SystemClock.elapsedRealtime();if(now-lastNavigationNotice<5000)return;lastNavigationNotice=now;
+        Toast.makeText(this,"Переход в приложение или магазин заблокирован. Вид сайта можно сменить в меню ⋮.",Toast.LENGTH_LONG).show();
+    }
+    private void showBrowserMenu(){
+        final WebView current=browser;if(!unlocked||current==null)return;
+        String[] choices=browserIsTikTok?new String[]{"Свернуть — вернуться за 2 минуты","Перезагрузить страницу","К списку сервисов (закрыть сайт)","Заблокировать сейчас",store.read().optBoolean("tiktokDesktop",true)?"Переключить на мобильный вид":"Переключить на версию для ПК"}:
+            new String[]{"Свернуть — вернуться за 2 минуты","Перезагрузить страницу","К списку сервисов (закрыть сайт)","Заблокировать сейчас"};
+        browserMenu=new AlertDialog.Builder(this).setTitle("Меню сайта").setItems(choices,(dialog,index)->{
+            if(!unlocked||browser!=current)return;
+            if(index==0)moveTaskToBack(true);
+            else if(index==1){String address=current.getUrl();if(WebNavigation.block(address))current.loadUrl(browserIsTikTok?"https://www.tiktok.com/foryou":"https://web.telegram.org/k/");else current.reload();}
+            else if(index==2){closeBrowser();vault();}
+            else if(index==3)lockToTracker();
+            else{
+                String address=current.getUrl();if(WebNavigation.block(address)||!WebNavigation.isTikTok(address))address="https://www.tiktok.com/foryou";
+                current.stopLoading();store.put("tiktokDesktop",!store.read().optBoolean("tiktokDesktop",true));applyBrowserMode(current);current.loadUrl(address);
+            }
+        }).setNegativeButton("Отмена",null).create();browserMenu.show();
     }
     private void immersive(boolean enabled) {
         if(isFinishing() || isDestroyed())return;
@@ -345,10 +392,11 @@ public final class MainActivity extends Activity {
         if(callback!=null)callback.onCustomViewHidden();
     }
     private void closeBrowser() {
+        if(browserMenu!=null){browserMenu.dismiss();browserMenu=null;}
         if(browser==null)return;hideVideo();WebView old=browser;browser=null;
         old.stopLoading();old.onPause();old.pauseTimers();old.clearHistory();old.clearCache(true);
         if(old.getParent() instanceof android.view.ViewGroup)((android.view.ViewGroup)old.getParent()).removeView(old);
-        old.removeAllViews();old.destroy();browserFrame=null;immersive(false);
+        old.removeAllViews();old.destroy();browserFrame=null;browserIsTikTok=false;immersive(false);
         if(store.read().optBoolean("clearWebOnExit",false))eraseWebData(false);
     }
     private void clearWeb() { closeBrowser(); eraseWebData(true); }
