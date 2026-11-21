@@ -7,10 +7,15 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowManager;
+import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.webkit.CookieManager;
 import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
@@ -34,6 +39,18 @@ public final class MainActivity extends Activity {
     private boolean unlocked, normalSession, inSetup, authBusy;
     private int generation;
     private WebView browser;
+    private FrameLayout browserFrame;
+    private View videoView;
+    private WebChromeClient.CustomViewCallback videoCallback;
+    private boolean foreground;
+    private final ReturnWindow returnWindow=new ReturnWindow();
+    private final Handler lifecycleHandler=new Handler(Looper.getMainLooper());
+    private final Runnable expireSession=new Runnable(){@Override public void run(){
+        if(!unlocked || foreground)return;
+        long now=SystemClock.elapsedRealtime();
+        if(returnWindow.expired(now))lockToTracker();
+        else lifecycleHandler.postDelayed(this,returnWindow.remaining(now));
+    }};
     private static boolean webCleaning;
     private final ExecutorService worker=Executors.newSingleThreadExecutor();
     private YearMonth month=YearMonth.now();
@@ -53,27 +70,51 @@ public final class MainActivity extends Activity {
         else if(normalSession) tracker();
         else login();
     }
+    @Override protected void onStart() {
+        super.onStart();
+        // Check before exposing a retained WebView, even if Android froze the timer.
+        if(unlocked && returnWindow.expired(SystemClock.elapsedRealtime()))lockToTracker();
+    }
+    @Override protected void onResume() {
+        super.onResume();foreground=true;
+        lifecycleHandler.removeCallbacks(expireSession);
+        if(unlocked && returnWindow.expired(SystemClock.elapsedRealtime())) {lockToTracker();return;}
+        returnWindow.clear();
+        if(browser!=null){browser.onResume();browser.resumeTimers();browserFrame.setVisibility(View.VISIBLE);immersive(true);}
+    }
     @Override protected void onPause() {
         super.onPause();
-        generation++; authBusy=false;
+        foreground=false;generation++; authBusy=false;
         if(unlocked) {
-            unlocked=false;
-            closeBrowser();
-            normalSession=true;
-            store.put("rememberNormal",true);
-            tracker();
+            returnWindow.leave(SystemClock.elapsedRealtime());
+            if(browser!=null){
+                browser.evaluateJavascript("document.querySelectorAll('video,audio').forEach(function(m){m.pause();});",null);
+                browser.onPause();browser.pauseTimers();browserFrame.setVisibility(View.INVISIBLE);
+            }
+            lifecycleHandler.removeCallbacks(expireSession);
+            lifecycleHandler.postDelayed(expireSession,returnWindow.remaining(SystemClock.elapsedRealtime()));
         } else if(!inSetup && store!=null && store.read().has("normalHash")) {
             // Clear any partially entered credentials when switching away from login.
             if(!normalSession) login();
         }
     }
-    @Override protected void onDestroy() { generation++; closeBrowser(); worker.shutdownNow(); super.onDestroy(); }
+    @Override protected void onDestroy() { lifecycleHandler.removeCallbacksAndMessages(null);generation++;unlocked=false;closeBrowser();worker.shutdownNow();super.onDestroy(); }
+    @Override public void onConfigurationChanged(android.content.res.Configuration config) {
+        super.onConfigurationChanged(config);
+        if(browser!=null && foreground){immersive(true);browserFrame.requestApplyInsets();}
+    }
+    @Override public void onWindowFocusChanged(boolean focused) {
+        super.onWindowFocusChanged(focused);
+        if(focused && foreground && browser!=null)immersive(true);
+    }
     @Override public void onBackPressed() {
-        if(browser!=null) { closeBrowser(); vault(); }
+        if(videoView!=null)hideVideo();
+        else if(browser!=null) { if(browser.canGoBack())browser.goBack();else{closeBrowser();vault();} }
         else if(unlocked) { lockToTracker(); }
         else { super.onBackPressed(); }
     }
     private void lockToTracker() {
+        lifecycleHandler.removeCallbacks(expireSession);returnWindow.clear();
         generation++; unlocked=false; closeBrowser();
         normalSession=true; store.put("rememberNormal",true); tracker();
     }
@@ -85,6 +126,7 @@ public final class MainActivity extends Activity {
     private LinearLayout vertical() { LinearLayout l=new LinearLayout(this); l.setOrientation(LinearLayout.VERTICAL); return l; }
     private LinearLayout card(LinearLayout parent) { LinearLayout l=vertical(); l.setPadding(dp(20),dp(18),dp(20),dp(18)); l.setBackground(rounded(Color.WHITE,24)); LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(-1,-2); p.bottomMargin=dp(14); parent.addView(l,p); return l; }
     private void screen(String eyebrow,String title,String subtitle) {
+        immersive(false);
         inSetup=false;
         root=vertical(); root.setBackgroundColor(BG);
         root.setPadding(dp(22),dp(18),dp(22),dp(12));
@@ -221,7 +263,7 @@ public final class MainActivity extends Activity {
     }
     private void vault() {
         if(!unlocked) {route();return;}
-        screen("Личный доступ","Ваше пространство","Закроется при выходе, переключении приложения или блокировке экрана.");
+        screen("Личный доступ","Ваше пространство","После ухода из приложения у вас есть 2 минуты, чтобы вернуться. Затем закрытый раздел заблокируется.");
         LinearLayout web=card(content);web.addView(bold("Веб-сервисы",20,INK));web.addView(text("Работают внутри Луны. Отдельных значков и уведомлений нет. Это веб-версии, возможности которых определяет сервис.",13,MUTED));
         button(web,"Telegram Web",true,()->openWeb("Telegram","https://web.telegram.org/k/"));
         button(web,"TikTok Web",false,()->openWeb("TikTok","https://www.tiktok.com/"));
@@ -240,27 +282,69 @@ public final class MainActivity extends Activity {
         closeBrowser();
         if(webCleaning)return;
         if(store.read().optBoolean("clearWebOnExit",false))store.put("webCleanupPending",true);
-        screen("Веб-сервис",name,"Уход в другое приложение закроет этот экран.");
-        button(content,"К списку сервисов",false,()->{closeBrowser();vault();});
+        inSetup=false;
+        browserFrame=new FrameLayout(this);browserFrame.setBackgroundColor(Color.BLACK);
+        browserFrame.setOnApplyWindowInsetsListener((v,insets)->{
+            if(android.os.Build.VERSION.SDK_INT>=30){
+                android.graphics.Insets cutout=insets.getInsets(WindowInsets.Type.displayCutout());
+                int keyboard=insets.isVisible(WindowInsets.Type.ime())?insets.getInsets(WindowInsets.Type.ime()).bottom:0;
+                v.setPadding(cutout.left,cutout.top,cutout.right,Math.max(cutout.bottom,keyboard));
+            }else{
+                android.view.DisplayCutout cutout=insets.getDisplayCutout();
+                int bottom=insets.getSystemWindowInsetBottom();
+                v.setPadding(cutout==null?0:cutout.getSafeInsetLeft(),cutout==null?0:cutout.getSafeInsetTop(),cutout==null?0:cutout.getSafeInsetRight(),bottom>dp(100)?bottom:0);
+            }
+            return insets;
+        });
         WebView w=new WebView(this);browser=w;
         WebSettings s=w.getSettings();s.setJavaScriptEnabled(true);s.setDomStorageEnabled(true);s.setAllowFileAccess(false);s.setAllowContentAccess(false);s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);s.setGeolocationEnabled(false);s.setSupportMultipleWindows(false);s.setJavaScriptCanOpenWindowsAutomatically(false);s.setMediaPlaybackRequiresUserGesture(true);s.setSaveFormData(false);s.setCacheMode(WebSettings.LOAD_NO_CACHE);
         CookieManager.getInstance().setAcceptCookie(true);CookieManager.getInstance().setAcceptThirdPartyCookies(w,false);
         w.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS);
-        w.setWebChromeClient(new WebChromeClient(){@Override public void onPermissionRequest(PermissionRequest r){r.deny();}});
+        w.setWebChromeClient(new WebChromeClient(){
+            @Override public void onPermissionRequest(PermissionRequest r){r.deny();}
+            @Override public void onShowCustomView(View view,CustomViewCallback callback){
+                if(videoView!=null || browser!=w || !foreground){callback.onCustomViewHidden();return;}
+                videoView=view;videoCallback=callback;browserFrame.addView(view,new FrameLayout.LayoutParams(-1,-1));w.setVisibility(View.INVISIBLE);immersive(true);
+            }
+            @Override public void onHideCustomView(){if(browser==w)hideVideo();}
+        });
         w.setWebViewClient(new WebViewClient(){
             @Override public boolean shouldOverrideUrlLoading(WebView view,WebResourceRequest req){return !"https".equals(req.getUrl().getScheme());}
             @Override public void onReceivedSslError(WebView view,android.webkit.SslErrorHandler handler,android.net.http.SslError error){handler.cancel();message("Сервис не подтвердил безопасное соединение.");}
             @Override public void onReceivedError(WebView view,WebResourceRequest req,android.webkit.WebResourceError error){if(req.isForMainFrame())Toast.makeText(MainActivity.this,"Не удалось загрузить сервис. Проверьте интернет.",Toast.LENGTH_LONG).show();}
         });
         w.setDownloadListener((u,agent,disposition,mime,length)->message("Загрузки отключены, чтобы файлы не попадали в общий список телефона."));
-        // Keep the WebView in a bounded viewport, independent from the native login UI.
-        content.addView(w,new LinearLayout.LayoutParams(-1,Math.max(dp(360),getResources().getDisplayMetrics().heightPixels-dp(280))));w.resumeTimers();w.loadUrl(url);
+        browserFrame.addView(w,new FrameLayout.LayoutParams(-1,-1));
+        TextView close=text("×",25,Color.WHITE);close.setGravity(Gravity.CENTER);close.setPadding(0,0,0,0);close.setBackground(rounded(0x9933282D,24));
+        close.setContentDescription("Закрыть сайт и вернуться к списку сервисов");
+        FrameLayout.LayoutParams closePosition=new FrameLayout.LayoutParams(dp(48),dp(48),Gravity.TOP|Gravity.END);closePosition.setMargins(dp(8),dp(8),dp(8),dp(8));browserFrame.addView(close,closePosition);
+        close.setOnClickListener(v->{closeBrowser();vault();});
+        setContentView(browserFrame);immersive(true);browserFrame.requestApplyInsets();w.onResume();w.resumeTimers();w.loadUrl(url);
+    }
+    private void immersive(boolean enabled) {
+        if(android.os.Build.VERSION.SDK_INT>=30){
+            getWindow().setDecorFitsSystemWindows(false);
+            WindowInsetsController controller=getWindow().getInsetsController();
+            if(controller!=null){
+                if(enabled){controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);controller.hide(WindowInsets.Type.systemBars());}
+                else controller.show(WindowInsets.Type.systemBars());
+            }
+        }else getWindow().getDecorView().setSystemUiVisibility(enabled?
+            View.SYSTEM_UI_FLAG_FULLSCREEN|View.SYSTEM_UI_FLAG_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN|View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_LAYOUT_STABLE:View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR|View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+    }
+    private void hideVideo() {
+        if(videoView==null)return;
+        View old=videoView;videoView=null;
+        if(old.getParent() instanceof android.view.ViewGroup)((android.view.ViewGroup)old.getParent()).removeView(old);
+        WebChromeClient.CustomViewCallback callback=videoCallback;videoCallback=null;
+        if(browser!=null)browser.setVisibility(View.VISIBLE);
+        if(callback!=null)callback.onCustomViewHidden();
     }
     private void closeBrowser() {
-        if(browser==null)return;WebView old=browser;browser=null;
+        if(browser==null)return;hideVideo();WebView old=browser;browser=null;
         old.stopLoading();old.onPause();old.pauseTimers();old.clearHistory();old.clearCache(true);
         if(old.getParent() instanceof android.view.ViewGroup)((android.view.ViewGroup)old.getParent()).removeView(old);
-        old.removeAllViews();old.destroy();
+        old.removeAllViews();old.destroy();browserFrame=null;immersive(false);
         if(store.read().optBoolean("clearWebOnExit",false))eraseWebData(false);
     }
     private void clearWeb() { closeBrowser(); eraseWebData(true); }
